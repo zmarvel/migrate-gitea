@@ -17,8 +17,6 @@ def delete(host, path, params=None, headers=None):
     logging.debug(f'DELETE {url}')
     response = requests.delete(url, headers=headers, params=params)
     return response
-    # json_content = json.loads(response.content)
-    # return json_content
 
 
 def post(host, path, **kwargs):
@@ -66,12 +64,6 @@ def migrate(src_host, src_token, dst_host, dst_token):
         logging.info('response_status=%d response_content=%s',
                      response.status_code, response.content)
         response.raise_for_status()
-
-        # migrate issues
-
-        # migrate releases
-
-        # TODO: migreate pull requests
 
 
 def delete_all(host, token):
