@@ -1,19 +1,20 @@
 import requests
 import json
 from argparse import ArgumentParser
+import logging
 
 
 def get(host, path, params=None, headers=None):
-    url = f'http://{host}/api/v1/{path}'
-    print(f'GET {url}')
+    url = f'{host}/api/v1/{path}'
+    logging.debug(f'GET {url}')
     response = requests.get(url, headers=headers, params=params)
     json_content = json.loads(response.content)
     return json_content
 
 
 def delete(host, path, params=None, headers=None):
-    url = f'http://{host}/api/v1/{path}'
-    print(f'DELETE {url}')
+    url = f'{host}/api/v1/{path}'
+    logging.debug(f'DELETE {url}')
     response = requests.delete(url, headers=headers, params=params)
     return response
     # json_content = json.loads(response.content)
@@ -21,8 +22,8 @@ def delete(host, path, params=None, headers=None):
 
 
 def post(host, path, **kwargs):
-    url = f'http://{host}/api/v1/{path}'
-    print(f'POST {url}')
+    url = f'{host}/api/v1/{path}'
+    logging.debug(f'POST url={url} {kwargs}')
     response = requests.post(url, **kwargs)
     return response
 
@@ -31,18 +32,21 @@ def migrate(src_host, src_token, dst_host, dst_token):
     src_headers = {'Authorization': f'token {src_token}'}
     dst_headers = {'Authorization': f'token {dst_token}'}
     # Get user ids
-    src_uid = get(src_host, 'user', headers=src_headers)['id']
-    print('src_uid', src_uid)
+    src_user = get(src_host, 'user', headers=src_headers)
+    print(src_user)
+    src_uid = src_user['id']
+    src_login = src_user['login']
     dst_uid = get(dst_host, 'user', headers=dst_headers)['id']
-    print('dst_uid', dst_uid)
+    logging.info('src_uid=%d src_login=%s dst_uid=%d', src_uid, src_login,
+                 dst_uid)
 
     src_repos = get(src_host,
-                    'repos/search',
+                    f'users/{src_login}/repos',
                     headers=src_headers,
-                    params={'uid': src_uid})['data']
+                    params={'uid': src_uid})
     for repo in src_repos:
-        repo_addr = f'http://{src_host}/{repo["full_name"]}.git'
-        print(repo_addr)
+        repo_addr = f'{src_host}/{repo["full_name"]}.git'
+        logging.info('src_addr=%s', repo_addr)
         response = post(dst_host,
                         'repos/migrate',
                         headers=dst_headers,
@@ -59,8 +63,8 @@ def migrate(src_host, src_token, dst_host, dst_token):
                             'service': 'gitea',
                             'private': repo['private'],
                         })
-        print(response.status_code)
-        print(response.content)
+        logging.info('response_status=%d response_content=%s',
+                     response.status_code, response.content)
         response.raise_for_status()
 
         # migrate issues
@@ -73,7 +77,6 @@ def migrate(src_host, src_token, dst_host, dst_token):
 def delete_all(host, token):
     auth_headers = {'Authorization': f'token {token}'}
     user = get(host, 'user', headers=auth_headers)
-    print('user', user)
     uid = user['id']
 
     repos = get(host,
@@ -98,12 +101,26 @@ if __name__ == '__main__':
     parser.add_argument('--src-token', help='Source API token')
     parser.add_argument('--src-token-file',
                         help='File containing source API token')
+    # parser.add_argument('--src-user', help='Migrate repos for only this user')
+
     parser.add_argument('--dst-token', help='Destination API token')
     parser.add_argument('--dst-token-file',
                         help='File containing destination API token')
+    # parser.add_argument('--dst-user',
+    #                     help='Create migrated repos under this user')
+
+    # TODO move to a separate script
     parser.add_argument('--delete-all',
                         action='store_true',
                         help='Instead of migrating, delete all repos')
+
+    parser.add_argument('--debug',
+                        action='store_true',
+                        help='Enable debug logging')
+    parser.add_argument('--verbose',
+                        action='store_true',
+                        help='Enable verbose logging')
+
     parser.add_argument('src_host',
                         help='Address (and optionally port) of source host')
     parser.add_argument(
@@ -129,8 +146,20 @@ if __name__ == '__main__':
         print('Must provide either --dst-token or --dst-token-file')
         exit(1)
 
+    log_level = logging.WARNING
+    if args.debug:
+        log_level = logging.DEBUG
+    elif args.verbose:
+        log_level = logging.INFO
+    logging.getLogger().setLevel(log_level)
+
     src_host = args.src_host
+    if not src_host.startswith('http'):
+        src_host = f'http://{src_host}'
+
     dst_host = args.dst_host
+    if not dst_host.startswith('http'):
+        dst_host = f'http://{dst_host}'
 
     if args.delete_all:
         delete_all(dst_host, dst_token)
