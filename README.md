@@ -1,6 +1,7 @@
 Migrate all repositories from one gitea instance to another.
 
-For my use case,
+For my use case, I captured the python environment in a Docker container. It can be build and
+started using the `run.sh` script. In the container, I did something like the following:
 
 ```
 python3 migrator.py --src-token natu-token.txt --dst-token monferno-token.txt --src-host https://git.zackmarvel.com --dst-host git-beta.zackmarvel.com
