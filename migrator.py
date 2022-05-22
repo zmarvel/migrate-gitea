@@ -1,6 +1,8 @@
+from dataclasses import dataclass
+from turtle import st
 import requests
 import json
-from argparse import ArgumentParser
+from argparse import ArgumentError, ArgumentParser
 import logging
 
 
@@ -27,14 +29,13 @@ def post(host, path, **kwargs):
 
 
 def migrate(src_host, src_token, dst_host, dst_token):
-    src_headers = {'Authorization': f'token {src_token}'}
-    dst_headers = {'Authorization': f'token {dst_token}'}
+    src_headers = get_headers(src_token)
+    dst_headers = get_headers(dst_token)
     # Get user ids
-    src_user = get(src_host, 'user', headers=src_headers)
-    print(src_user)
+    src_user = get_user(src_host, headers=src_headers)
     src_uid = src_user['id']
     src_login = src_user['login']
-    dst_uid = get(dst_host, 'user', headers=dst_headers)['id']
+    dst_uid = get_user(dst_host, headers=dst_headers)['id']
     logging.info('src_uid=%d src_login=%s dst_uid=%d', src_uid, src_login,
                  dst_uid)
 
@@ -85,75 +86,180 @@ def delete_all(host, token):
         response.raise_for_status()
 
 
+class Server:
+
+    def __init__(self, host: str, token: str):
+        self.token = token
+        self.host = host
+        self._headers = {'Authorization': f'token {self.token}'}
+
+    def get_user(self, **kwargs):
+        response = self.get('user', **kwargs)
+        print(f'response: {response}')
+        return response
+
+    @property
+    def headers(self):
+        return self._headers
+
+    def _add_headers_to_kwargs(self, kwargs):
+        if 'headers' not in kwargs:
+            kwargs['headers'] = {}
+        kwargs['headers'].update(self.headers)
+
+    def get(self, path, **kwargs):
+        self._add_headers_to_kwargs(kwargs)
+
+        url = f'{self.host}/api/v1/{path}'
+        logging.debug('GET %s', url)
+        response = requests.get(url, **kwargs)
+        logging.debug('response=%s', response)
+        json_content = json.loads(response.content)
+        return json_content
+
+    def delete(self, path, **kwargs):
+        self._add_headers_to_kwargs(kwargs)
+
+        url = f'{self.host}/api/v1/{path}'
+        logging.debug(f'DELETE {url}')
+        response = requests.delete(url, **kwargs)
+        return response
+
+    def post(self, path, **kwargs):
+        self._add_headers_to_kwargs(kwargs)
+
+        url = f'{self.host}/api/v1/{path}'
+        logging.debug(f'POST url={url} {kwargs}')
+        response = requests.post(url, **kwargs)
+        return response
+
+    def get_issues(self, user: str, repo: str, state: str = 'open'):
+        """Get issues associated with a user's repository.
+
+        Arguments:
+            user: Username of repository owner.
+            repo: Repository name.
+            state: One of (closed, open, all).
+        """
+        return self.get(f'repos/{user}/{repo}/issues', params={'state': state})
+
+    def post_issue(self, user: str, repo: str, title: str, body: str,
+                   closed: bool):
+        """Add an issue to a user's repository.
+
+        Arguments:
+            user: Username of repository owner.
+            repo: Repository name.
+        """
+
+        data = {
+            'title': title,
+            'body': body,
+            'closed': closed,
+        }
+        logging.debug('Post issue %s', data)
+        response = self.post(f'repos/{user}/{repo}/issues',
+                             data=json.dumps(data),
+                             headers={'Content-Type': 'text/json'})
+        logging.debug('response=%s text=%s', response, response.text)
+
+
+@dataclass
+class CommonArgs:
+    src_token: str
+    dst_token: str
+
+    src_host: str
+    dst_host: str
+
+    debug: bool
+    verbose: bool
+
+    @staticmethod
+    def add_to_parser(parser: ArgumentParser):
+        parser.add_argument('--src-token', help='Source API token')
+        parser.add_argument('--src-token-file',
+                            help='File containing source API token')
+        # parser.add_argument('--src-user', help='Migrate repos for only this user')
+
+        parser.add_argument('--dst-token', help='Destination API token')
+        parser.add_argument('--dst-token-file',
+                            help='File containing destination API token')
+        # parser.add_argument('--dst-user',
+        #                     help='Create migrated repos under this user')
+
+        parser.add_argument('--debug',
+                            action='store_true',
+                            help='Enable debug logging')
+        parser.add_argument('--verbose',
+                            action='store_true',
+                            help='Enable verbose logging')
+
+        parser.add_argument(
+            'src_host', help='Address (and optionally port) of source host')
+        parser.add_argument(
+            'dst_host',
+            help='Address (and optionally port) of destination host')
+
+    @classmethod
+    def from_args(cls, args):
+        if args.src_token_file is not None:
+            with open(args.src_token_file, 'r') as f:
+                src_token = f.read().strip()
+        elif args.src_token is not None:
+            src_token = args.src_token
+        else:
+            raise ValueError(
+                'Must provide either --src-token or --src-token-file')
+
+        if args.dst_token_file is not None:
+            with open(args.dst_token_file, 'r') as f:
+                dst_token = f.read().strip()
+        elif args.dst_token is not None:
+            dst_token = args.dst_token
+        else:
+            raise ValueError(
+                'Must provide either --dst-token or --dst-token-file')
+
+        # TODO: consider using a library to normalize urls
+        src_host = args.src_host
+        if not src_host.startswith('http'):
+            src_host = f'http://{src_host}'
+
+        dst_host = args.dst_host
+        if not dst_host.startswith('http'):
+            dst_host = f'http://{dst_host}'
+
+        return cls(src_token=src_token,
+                   dst_token=dst_token,
+                   src_host=src_host,
+                   dst_host=dst_host,
+                   debug=args.debug,
+                   verbose=args.verbose)
+
+
 if __name__ == '__main__':
 
     parser = ArgumentParser(
         description='Migrate from one gitea instance to another')
-
-    parser.add_argument('--src-token', help='Source API token')
-    parser.add_argument('--src-token-file',
-                        help='File containing source API token')
-    # parser.add_argument('--src-user', help='Migrate repos for only this user')
-
-    parser.add_argument('--dst-token', help='Destination API token')
-    parser.add_argument('--dst-token-file',
-                        help='File containing destination API token')
-    # parser.add_argument('--dst-user',
-    #                     help='Create migrated repos under this user')
 
     # TODO move to a separate script
     parser.add_argument('--delete-all',
                         action='store_true',
                         help='Instead of migrating, delete all repos')
 
-    parser.add_argument('--debug',
-                        action='store_true',
-                        help='Enable debug logging')
-    parser.add_argument('--verbose',
-                        action='store_true',
-                        help='Enable verbose logging')
-
-    parser.add_argument('src_host',
-                        help='Address (and optionally port) of source host')
-    parser.add_argument(
-        'dst_host', help='Address (and optionally port) of destination host')
-
     args = parser.parse_args()
-
-    if args.src_token_file is not None:
-        with open(args.src_token_file, 'r') as f:
-            src_token = f.read().strip()
-    elif args.src_token is not None:
-        src_token = args.src_token
-    else:
-        print('Must provide either --src-token or --src-token-file')
-        exit(1)
-
-    if args.dst_token_file is not None:
-        with open(args.dst_token_file, 'r') as f:
-            dst_token = f.read().strip()
-    elif args.dst_token is not None:
-        dst_token = args.dst_token
-    else:
-        print('Must provide either --dst-token or --dst-token-file')
-        exit(1)
+    common_args = CommonArgs.from_args(args)
 
     log_level = logging.WARNING
-    if args.debug:
+    if common_args.debug:
         log_level = logging.DEBUG
-    elif args.verbose:
+    elif common_args.verbose:
         log_level = logging.INFO
     logging.getLogger().setLevel(log_level)
 
-    src_host = args.src_host
-    if not src_host.startswith('http'):
-        src_host = f'http://{src_host}'
-
-    dst_host = args.dst_host
-    if not dst_host.startswith('http'):
-        dst_host = f'http://{dst_host}'
-
     if args.delete_all:
-        delete_all(dst_host, dst_token)
+        delete_all(common_args.dst_host, common_args.dst_token)
     else:
-        migrate(src_host, src_token, dst_host, dst_token)
+        migrate(common_args.src_host, common_args.src_token,
+                common_args.dst_host, common_args.dst_token)
